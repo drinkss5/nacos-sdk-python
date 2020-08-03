@@ -1,8 +1,12 @@
 import base64
 import hashlib
 import logging
+from os import access
 import socket
 import json
+from urllib import request
+import datetime
+import requests
 
 try:
     import ssl
@@ -41,8 +45,8 @@ VERSION = "0.1.1"
 DEFAULT_GROUP_NAME = "DEFAULT_GROUP"
 DEFAULT_NAMESPACE = ""
 
-WORD_SEPARATOR = u'\x02'
-LINE_SEPARATOR = u'\x01'
+WORD_SEPARATOR = "\x02"
+LINE_SEPARATOR = "\x01"
 
 DEFAULTS = {
     "APP_NAME": "Nacos-SDK-Python",
@@ -55,8 +59,16 @@ DEFAULTS = {
 }
 
 OPTIONS = set(
-    ["default_timeout", "pulling_timeout", "pulling_config_size", "callback_thread_num",
-     "failover_base", "snapshot_base", "no_snapshot"])
+    [
+        "default_timeout",
+        "pulling_timeout",
+        "pulling_config_size",
+        "callback_thread_num",
+        "failover_base",
+        "snapshot_base",
+        "no_snapshot",
+    ]
+)
 
 
 def process_common_config_params(data_id, group):
@@ -97,9 +109,15 @@ class WatcherWrap:
 class CacheData:
     def __init__(self, key, client):
         self.key = key
-        local_value = read_file_str(client.failover_base, key) or read_file_str(client.snapshot_base, key)
+        local_value = read_file_str(client.failover_base, key) or read_file_str(
+            client.snapshot_base, key
+        )
         self.content = local_value
-        self.md5 = hashlib.md5(local_value.encode("UTF-8")).hexdigest() if local_value else None
+        self.md5 = (
+            hashlib.md5(local_value.encode("UTF-8")).hexdigest()
+            if local_value
+            else None
+        )
         self.is_init = True
         if not self.md5:
             logger.debug("[init-cache] cache for %s does not have local value" % key)
@@ -120,12 +138,16 @@ class NacosClient:
             global logger
             logger = logging.getLogger("nacos")
             handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s:%(message)s"))
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)s %(name)s:%(message)s")
+            )
             logger.addHandler(handler)
             logger.setLevel(logging.DEBUG)
             NacosClient.debug = True
 
-    def __init__(self, server_addresses, endpoint=None, namespace=None, ak=None, sk=None):
+    def __init__(
+        self, server_addresses, endpoint=None, namespace=None, ak=None, sk=None
+    ):
         self.server_list = list()
 
         try:
@@ -141,6 +163,7 @@ class NacosClient:
         self.namespace = namespace or DEFAULT_NAMESPACE or ""
         self.ak = ak
         self.sk = sk
+        self.token = dict(accessToken="", ttl=0)
 
         self.server_list_lock = RLock()
         self.server_offset = 0
@@ -185,7 +208,9 @@ class NacosClient:
     def remove_config(self, data_id, group, timeout=None):
         data_id, group = process_common_config_params(data_id, group)
         logger.info(
-            "[remove] data_id:%s, group:%s, namespace:%s, timeout:%s" % (data_id, group, self.namespace, timeout))
+            "[remove] data_id:%s, group:%s, namespace:%s, timeout:%s"
+            % (data_id, group, self.namespace, timeout)
+        )
 
         params = {
             "dataId": data_id,
@@ -195,20 +220,32 @@ class NacosClient:
             params["tenant"] = self.namespace
 
         try:
-            resp = self._do_sync_req("/nacos/v1/cs/configs", None, None, params,
-                                     timeout or self.default_timeout, "DELETE")
+            resp = self._do_sync_req(
+                "/nacos/v1/cs/configs",
+                None,
+                None,
+                params,
+                timeout or self.default_timeout,
+                "DELETE",
+            )
             c = resp.read()
-            logger.info("[remove] remove group:%s, data_id:%s, server response:%s" % (
-                group, data_id, c))
+            logger.info(
+                "[remove] remove group:%s, data_id:%s, server response:%s"
+                % (group, data_id, c)
+            )
             return c == b"true"
         except HTTPError as e:
             if e.code == HTTPStatus.FORBIDDEN:
                 logger.error(
-                    "[remove] no right for namespace:%s, group:%s, data_id:%s" % (self.namespace, group, data_id))
+                    "[remove] no right for namespace:%s, group:%s, data_id:%s"
+                    % (self.namespace, group, data_id)
+                )
                 raise NacosException("Insufficient privilege.")
             else:
-                logger.error("[remove] error code [:%s] for namespace:%s, group:%s, data_id:%s" % (
-                    e.code, self.namespace, group, data_id))
+                logger.error(
+                    "[remove] error code [:%s] for namespace:%s, group:%s, data_id:%s"
+                    % (e.code, self.namespace, group, data_id)
+                )
                 raise NacosException("Request Error, code is %s" % e.code)
         except Exception as e:
             logger.exception("[remove] exception %s occur" % str(e))
@@ -222,8 +259,10 @@ class NacosClient:
         if type(content) == bytes:
             content = content.decode("UTF-8")
 
-        logger.info("[publish] data_id:%s, group:%s, namespace:%s, content:%s, timeout:%s" % (
-            data_id, group, self.namespace, truncate(content), timeout))
+        logger.info(
+            "[publish] data_id:%s, group:%s, namespace:%s, content:%s, timeout:%s"
+            % (data_id, group, self.namespace, truncate(content), timeout)
+        )
 
         params = {
             "dataId": data_id,
@@ -235,11 +274,19 @@ class NacosClient:
             params["tenant"] = self.namespace
 
         try:
-            resp = self._do_sync_req("/nacos/v1/cs/configs", None, None, params,
-                                     timeout or self.default_timeout, "POST")
+            resp = self._do_sync_req(
+                "/nacos/v1/cs/configs",
+                None,
+                None,
+                params,
+                timeout or self.default_timeout,
+                "POST",
+            )
             c = resp.read()
-            logger.info("[publish] publish content, group:%s, data_id:%s, server response:%s" % (
-                group, data_id, c))
+            logger.info(
+                "[publish] publish content, group:%s, data_id:%s, server response:%s"
+                % (group, data_id, c)
+            )
             return c == b"true"
         except HTTPError as e:
             if e.code == HTTPStatus.FORBIDDEN:
@@ -253,8 +300,10 @@ class NacosClient:
     def get_config(self, data_id, group, timeout=None, no_snapshot=None):
         no_snapshot = self.no_snapshot if no_snapshot is None else no_snapshot
         data_id, group = process_common_config_params(data_id, group)
-        logger.info("[get-config] data_id:%s, group:%s, namespace:%s, timeout:%s" % (
-            data_id, group, self.namespace, timeout))
+        logger.info(
+            "[get-config] data_id:%s, group:%s, namespace:%s, timeout:%s"
+            % (data_id, group, self.namespace, timeout)
+        )
 
         params = {
             "dataId": data_id,
@@ -267,33 +316,51 @@ class NacosClient:
         # get from failover
         content = read_file_str(self.failover_base, cache_key)
         if content is None:
-            logger.debug("[get-config] failover config is not exist for %s, try to get from server" % cache_key)
+            logger.debug(
+                "[get-config] failover config is not exist for %s, try to get from server"
+                % cache_key
+            )
         else:
-            logger.debug("[get-config] get %s from failover directory, content is %s" % (cache_key, truncate(content)))
+            logger.debug(
+                "[get-config] get %s from failover directory, content is %s"
+                % (cache_key, truncate(content))
+            )
             return content
 
         # get from server
         try:
-            resp = self._do_sync_req("/nacos/v1/cs/configs", None, params, None, timeout or self.default_timeout)
+            resp = self._do_sync_req(
+                "/nacos/v1/cs/configs",
+                None,
+                params,
+                None,
+                timeout or self.default_timeout,
+            )
             content = resp.read().decode("UTF-8")
         except HTTPError as e:
             if e.code == HTTPStatus.NOT_FOUND:
                 logger.warning(
-                    "[get-config] config not found for data_id:%s, group:%s, namespace:%s, try to delete snapshot" % (
-                        data_id, group, self.namespace))
+                    "[get-config] config not found for data_id:%s, group:%s, namespace:%s, try to delete snapshot"
+                    % (data_id, group, self.namespace)
+                )
                 delete_file(self.snapshot_base, cache_key)
                 return None
             elif e.code == HTTPStatus.CONFLICT:
                 logger.error(
-                    "[get-config] config being modified concurrently for data_id:%s, group:%s, namespace:%s" % (
-                        data_id, group, self.namespace))
+                    "[get-config] config being modified concurrently for data_id:%s, group:%s, namespace:%s"
+                    % (data_id, group, self.namespace)
+                )
             elif e.code == HTTPStatus.FORBIDDEN:
-                logger.error("[get-config] no right for data_id:%s, group:%s, namespace:%s" % (
-                    data_id, group, self.namespace))
+                logger.error(
+                    "[get-config] no right for data_id:%s, group:%s, namespace:%s"
+                    % (data_id, group, self.namespace)
+                )
                 raise NacosException("Insufficient privilege.")
             else:
-                logger.error("[get-config] error code [:%s] for data_id:%s, group:%s, namespace:%s" % (
-                    e.code, data_id, group, self.namespace))
+                logger.error(
+                    "[get-config] error code [:%s] for data_id:%s, group:%s, namespace:%s"
+                    % (e.code, data_id, group, self.namespace)
+                )
                 if no_snapshot:
                     raise
         except Exception as e:
@@ -306,22 +373,30 @@ class NacosClient:
 
         if content is not None:
             logger.info(
-                "[get-config] content from server:%s, data_id:%s, group:%s, namespace:%s, try to save snapshot" % (
-                    truncate(content), data_id, group, self.namespace))
+                "[get-config] content from server:%s, data_id:%s, group:%s, namespace:%s, try to save snapshot"
+                % (truncate(content), data_id, group, self.namespace)
+            )
             try:
                 save_file(self.snapshot_base, cache_key, content)
             except Exception as e:
-                logger.exception("[get-config] save snapshot failed for %s, data_id:%s, group:%s, namespace:%s" % (
-                    data_id, group, self.namespace, str(e)))
+                logger.exception(
+                    "[get-config] save snapshot failed for %s, data_id:%s, group:%s, namespace:%s"
+                    % (data_id, group, self.namespace, str(e))
+                )
             return content
 
-        logger.error("[get-config] get config from server failed, try snapshot, data_id:%s, group:%s, namespace:%s" % (
-            data_id, group, self.namespace))
+        logger.error(
+            "[get-config] get config from server failed, try snapshot, data_id:%s, group:%s, namespace:%s"
+            % (data_id, group, self.namespace)
+        )
         content = read_file_str(self.snapshot_base, cache_key)
         if content is None:
             logger.warning("[get-config] snapshot is not exist for %s." % cache_key)
         else:
-            logger.debug("[get-config] get %s from snapshot directory, content is %s" % (cache_key, truncate(content)))
+            logger.debug(
+                "[get-config] get %s from snapshot directory, content is %s"
+                % (cache_key, truncate(content))
+            )
             return content
 
     @synchronized_with_attr("pulling_lock")
@@ -333,7 +408,10 @@ class NacosClient:
         if not cb_list:
             raise NacosException("A callback function is needed.")
         data_id, group = process_common_config_params(data_id, group)
-        logger.info("[add-watcher] data_id:%s, group:%s, namespace:%s" % (data_id, group, self.namespace))
+        logger.info(
+            "[add-watcher] data_id:%s, group:%s, namespace:%s"
+            % (data_id, group, self.namespace)
+        )
         cache_key = group_key(data_id, group, self.namespace)
         wl = self.watcher_mapping.get(cache_key)
         if not wl:
@@ -341,8 +419,10 @@ class NacosClient:
             self.watcher_mapping[cache_key] = wl
         for cb in cb_list:
             wl.append(WatcherWrap(cache_key, cb))
-            logger.info("[add-watcher] watcher has been added for key:%s, new callback is:%s, callback number is:%s" % (
-                cache_key, cb.__name__, len(wl)))
+            logger.info(
+                "[add-watcher] watcher has been added for key:%s, new callback is:%s, callback number is:%s"
+                % (cache_key, cb.__name__, len(wl))
+            )
 
         if self.puller_mapping is None:
             logger.debug("[add-watcher] pulling should be initialized")
@@ -354,15 +434,22 @@ class NacosClient:
 
         for key, puller_info in self.puller_mapping.items():
             if len(puller_info[1]) < self.pulling_config_size:
-                logger.debug("[add-watcher] puller:%s is available, add key:%s" % (puller_info[0], cache_key))
+                logger.debug(
+                    "[add-watcher] puller:%s is available, add key:%s"
+                    % (puller_info[0], cache_key)
+                )
                 puller_info[1].append(cache_key)
                 self.puller_mapping[cache_key] = puller_info
                 break
         else:
-            logger.debug("[add-watcher] no puller available, new one and add key:%s" % cache_key)
+            logger.debug(
+                "[add-watcher] no puller available, new one and add key:%s" % cache_key
+            )
             key_list = self.process_mgr.list()
             key_list.append(cache_key)
-            puller = Process(target=self._do_pulling, args=(key_list, self.notify_queue))
+            puller = Process(
+                target=self._do_pulling, args=(key_list, self.notify_queue)
+            )
             puller.daemon = True
             puller.start()
             self.puller_mapping[cache_key] = (puller, key_list)
@@ -391,25 +478,38 @@ class NacosClient:
         for i in wrap_to_remove:
             wl.remove(i)
 
-        logger.info("[remove-watcher] %s is removed from %s, remove all:%s" % (cb.__name__, cache_key, remove_all))
+        logger.info(
+            "[remove-watcher] %s is removed from %s, remove all:%s"
+            % (cb.__name__, cache_key, remove_all)
+        )
         if not wl:
-            logger.debug("[remove-watcher] there is no watcher for:%s, kick out from pulling" % cache_key)
+            logger.debug(
+                "[remove-watcher] there is no watcher for:%s, kick out from pulling"
+                % cache_key
+            )
             self.watcher_mapping.pop(cache_key)
             puller_info = self.puller_mapping[cache_key]
             puller_info[1].remove(cache_key)
             if not puller_info[1]:
-                logger.debug("[remove-watcher] there is no pulling keys for puller:%s, stop it" % puller_info[0])
+                logger.debug(
+                    "[remove-watcher] there is no pulling keys for puller:%s, stop it"
+                    % puller_info[0]
+                )
                 self.puller_mapping.pop(cache_key)
                 puller_info[0].terminate()
 
-    def _do_sync_req(self, url, headers=None, params=None, data=None, timeout=None, method="GET"):
+    def _do_sync_req(
+        self, url, headers=None, params=None, data=None, timeout=None, method="GET"
+    ):
         url = "?".join([url, urlencode(params)]) if params else url
+        data = data or {}
         all_headers = self._get_common_headers(params, data)
         if headers:
             all_headers.update(headers)
         logger.debug(
-            "[do-sync-req] url:%s, headers:%s, params:%s, data:%s, timeout:%s" % (
-                url, all_headers, params, data, timeout))
+            "[do-sync-req] url:%s, headers:%s, params:%s, data:%s, timeout:%s"
+            % (url, all_headers, params, data, timeout)
+        )
         tries = 0
         while True:
             try:
@@ -420,13 +520,14 @@ class NacosClient:
                 address, port = server_info
                 server = ":".join([address, str(port)])
                 server_url = "%s://%s" % ("http", server)
-                if python_version_bellow("3"):
-                    req = Request(url=server_url + url, data=urlencode(data).encode() if data else None,
-                                  headers=all_headers)
-                    req.get_method = lambda: method
-                else:
-                    req = Request(url=server_url + url, data=urlencode(data).encode() if data else None,
-                                  headers=all_headers, method=method)
+                token = self._get_token(server_url)
+                url = f"{url}&accessToken={token}"
+                req = Request(
+                    url=server_url + url,
+                    data=urlencode(data).encode() if data else None,
+                    headers=all_headers,
+                    method=method,
+                )
 
                 # for python version compatibility
                 if python_version_bellow("2.7.9"):
@@ -436,19 +537,30 @@ class NacosClient:
                 logger.debug("[do-sync-req] info from server:%s" % server)
                 return resp
             except HTTPError as e:
-                if e.code in [HTTPStatus.INTERNAL_SERVER_ERROR, HTTPStatus.BAD_GATEWAY,
-                              HTTPStatus.SERVICE_UNAVAILABLE]:
-                    logger.warning("[do-sync-req] server:%s is not available for reason:%s" % (server, e.msg))
+                if e.code in [
+                    HTTPStatus.INTERNAL_SERVER_ERROR,
+                    HTTPStatus.BAD_GATEWAY,
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                ]:
+                    logger.warning(
+                        "[do-sync-req] server:%s is not available for reason:%s"
+                        % (server, e.msg)
+                    )
                 else:
                     raise
             except socket.timeout:
                 logger.warning("[do-sync-req] %s request timeout" % server)
             except URLError as e:
-                logger.warning("[do-sync-req] %s connection error:%s" % (server, e.reason))
+                logger.warning(
+                    "[do-sync-req] %s connection error:%s" % (server, e.reason)
+                )
 
             tries += 1
             if tries >= len(self.server_list):
-                logger.error("[do-sync-req] %s maybe down, no server is currently available" % server)
+                logger.error(
+                    "[do-sync-req] %s maybe down, no server is currently available"
+                    % server
+                )
                 raise NacosRequestException("All server are not available")
             self.change_server()
             logger.warning("[do-sync-req] %s maybe down, skip to next" % server)
@@ -473,15 +585,23 @@ class NacosClient:
                 if cache_data.is_init:
                     contains_init_key = True
                 data_id, group, namespace = parse_key(cache_key)
-                probe_update_string += WORD_SEPARATOR.join(
-                    [data_id, group, cache_data.md5 or "", self.namespace]) + LINE_SEPARATOR
+                probe_update_string += (
+                    WORD_SEPARATOR.join(
+                        [data_id, group, cache_data.md5 or "", self.namespace]
+                    )
+                    + LINE_SEPARATOR
+                )
 
             for k in unused_keys:
-                logger.debug("[do-pulling] %s is no longer watched, remove from cache" % k)
+                logger.debug(
+                    "[do-pulling] %s is no longer watched, remove from cache" % k
+                )
                 cache_pool.pop(k)
 
             logger.debug(
-                "[do-pulling] try to detected change from server probe string is %s" % truncate(probe_update_string))
+                "[do-pulling] try to detected change from server probe string is %s"
+                % truncate(probe_update_string)
+            )
             headers = {"Long-Pulling-Timeout": int(self.pulling_timeout * 1000)}
             # if contains_init_key:
             #     headers["longPullingNoHangUp"] = "true"
@@ -490,15 +610,31 @@ class NacosClient:
 
             changed_keys = list()
             try:
-                resp = self._do_sync_req("/nacos/v1/cs/configs/listener", headers, None, data,
-                                         self.pulling_timeout + 10, "POST")
-                changed_keys = [group_key(*i) for i in parse_pulling_result(resp.read())]
-                logger.debug("[do-pulling] following keys are changed from server %s" % truncate(str(changed_keys)))
+                resp = self._do_sync_req(
+                    "/nacos/v1/cs/configs/listener",
+                    headers,
+                    None,
+                    data,
+                    self.pulling_timeout + 10,
+                    "POST",
+                )
+                changed_keys = [
+                    group_key(*i) for i in parse_pulling_result(resp.read())
+                ]
+                logger.debug(
+                    "[do-pulling] following keys are changed from server %s"
+                    % truncate(str(changed_keys))
+                )
             except NacosException as e:
-                logger.error("[do-pulling] nacos exception: %s, waiting for recovery" % str(e))
+                logger.error(
+                    "[do-pulling] nacos exception: %s, waiting for recovery" % str(e)
+                )
                 time.sleep(1)
             except Exception as e:
-                logger.exception("[do-pulling] exception %s occur, return empty list, waiting for recovery" % str(e))
+                logger.exception(
+                    "[do-pulling] exception %s occur, return empty list, waiting for recovery"
+                    % str(e)
+                )
                 time.sleep(1)
 
             for cache_key, cache_data in cache_pool.items():
@@ -506,7 +642,11 @@ class NacosClient:
                 if cache_key in changed_keys:
                     data_id, group, namespace = parse_key(cache_key)
                     content = self.get_config(data_id, group)
-                    md5 = hashlib.md5(content.encode("UTF-8")).hexdigest() if content is not None else None
+                    md5 = (
+                        hashlib.md5(content.encode("UTF-8")).hexdigest()
+                        if content is not None
+                        else None
+                    )
                     cache_data.md5 = md5
                     cache_data.content = content
                 queue.put((cache_key, cache_data.content, cache_data.md5))
@@ -531,7 +671,9 @@ class NacosClient:
             logger.debug("[process-polling-result] receive an event:%s" % cache_key)
             wl = self.watcher_mapping.get(cache_key)
             if not wl:
-                logger.warning("[process-polling-result] no watcher on %s, ignored" % cache_key)
+                logger.warning(
+                    "[process-polling-result] no watcher on %s, ignored" % cache_key
+                )
                 continue
 
             data_id, group, namespace = parse_key(cache_key)
@@ -547,21 +689,45 @@ class NacosClient:
             for watcher in wl:
                 if not watcher.last_md5 == md5:
                     logger.debug(
-                        "[process-polling-result] md5 changed since last call, calling %s" % watcher.callback.__name__)
+                        "[process-polling-result] md5 changed since last call, calling %s"
+                        % watcher.callback.__name__
+                    )
                     try:
                         self.callback_tread_pool.apply(watcher.callback, (params,))
                     except Exception as e:
-                        logger.exception("[process-polling-result] exception %s occur while calling %s " % (
-                            str(e), watcher.callback.__name__))
+                        logger.exception(
+                            "[process-polling-result] exception %s occur while calling %s "
+                            % (str(e), watcher.callback.__name__)
+                        )
                     watcher.last_md5 = md5
 
     def _get_common_headers(self, params, data):
         return {}
 
-    def add_naming_instance(self, service_name, ip, port, cluster_name=None, weight=1.0, metadata=None,
-                            enable=True, healthy=True):
-        logger.info("[add-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s" % (
-            ip, port, service_name, self.namespace))
+    def _get_token(self, url: str) -> str:
+        now = datetime.datetime.now().timestamp()
+        if now > self.token["ttl"]:
+            api = f"{url}/nacos/v1/auth/users/login?encoding=UTF-8&username={self.ak}"
+            response = requests.post(api, data=dict(password=self.sk))
+            self.token.update(response.json())
+            self.token["ttl"] = now + self.token["tokenTtl"]
+        return self.token["accessToken"]
+
+    def add_naming_instance(
+        self,
+        service_name,
+        ip,
+        port,
+        cluster_name=None,
+        weight=1.0,
+        metadata=None,
+        enable=True,
+        healthy=True,
+    ):
+        logger.info(
+            "[add-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s"
+            % (ip, port, service_name, self.namespace)
+        )
 
         params = {
             "ip": ip,
@@ -571,17 +737,26 @@ class NacosClient:
             "enable": enable,
             "healthy": healthy,
             "metadata": metadata,
-            "clusterName": cluster_name
+            "clusterName": cluster_name,
         }
 
         if self.namespace:
             params["namespaceId"] = self.namespace
 
         try:
-            resp = self._do_sync_req("/nacos/v1/ns/instance", None, None, params, self.default_timeout, "POST")
+            resp = self._do_sync_req(
+                "/nacos/v1/ns/instance",
+                None,
+                None,
+                params,
+                self.default_timeout,
+                "POST",
+            )
             c = resp.read()
-            logger.info("[add-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s, server response:%s" % (
-                ip, port, service_name, self.namespace, c))
+            logger.info(
+                "[add-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s, server response:%s"
+                % (ip, port, service_name, self.namespace, c)
+            )
             return c == b"ok"
         except HTTPError as e:
             if e.code == HTTPStatus.FORBIDDEN:
@@ -593,8 +768,10 @@ class NacosClient:
             raise
 
     def remove_naming_instance(self, service_name, ip, port, cluster_name=None):
-        logger.info("[remove-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s" % (
-            ip, port, service_name, self.namespace))
+        logger.info(
+            "[remove-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s"
+            % (ip, port, service_name, self.namespace)
+        )
 
         params = {
             "ip": ip,
@@ -609,10 +786,19 @@ class NacosClient:
             params["namespaceId"] = self.namespace
 
         try:
-            resp = self._do_sync_req("/nacos/v1/ns/instance", None, None, params, self.default_timeout, "DELETE")
+            resp = self._do_sync_req(
+                "/nacos/v1/ns/instance",
+                None,
+                None,
+                params,
+                self.default_timeout,
+                "DELETE",
+            )
             c = resp.read()
-            logger.info("[remove-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s, server response:%s" % (
-                ip, port, service_name, self.namespace, c))
+            logger.info(
+                "[remove-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s, server response:%s"
+                % (ip, port, service_name, self.namespace, c)
+            )
             return c == b"ok"
         except HTTPError as e:
             if e.code == HTTPStatus.FORBIDDEN:
@@ -623,10 +809,20 @@ class NacosClient:
             logger.exception("[remove-naming-instance] exception %s occur" % str(e))
             raise
 
-    def modify_naming_instance(self, service_name, ip, port, cluster_name=None, weight=None, metadata=None,
-                               enable=None):
-        logger.info("[modify-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s" % (
-            ip, port, service_name, self.namespace))
+    def modify_naming_instance(
+        self,
+        service_name,
+        ip,
+        port,
+        cluster_name=None,
+        weight=None,
+        metadata=None,
+        enable=None,
+    ):
+        logger.info(
+            "[modify-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s"
+            % (ip, port, service_name, self.namespace)
+        )
 
         params = {
             "ip": ip,
@@ -650,10 +846,14 @@ class NacosClient:
             params["namespaceId"] = self.namespace
 
         try:
-            resp = self._do_sync_req("/nacos/v1/ns/instance", None, None, params, self.default_timeout, "PUT")
+            resp = self._do_sync_req(
+                "/nacos/v1/ns/instance", None, None, params, self.default_timeout, "PUT"
+            )
             c = resp.read()
-            logger.info("[modify-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s, server response:%s" % (
-                ip, port, service_name, self.namespace, c))
+            logger.info(
+                "[modify-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s, server response:%s"
+                % (ip, port, service_name, self.namespace, c)
+            )
             return c == b"ok"
         except HTTPError as e:
             if e.code == HTTPStatus.FORBIDDEN:
@@ -665,12 +865,12 @@ class NacosClient:
             raise
 
     def list_naming_instance(self, service_name, clusters=None, healthy_only=False):
-        logger.info("[list-naming-instance] service_name:%s, namespace:%s" % (service_name, self.namespace))
+        logger.info(
+            "[list-naming-instance] service_name:%s, namespace:%s"
+            % (service_name, self.namespace)
+        )
 
-        params = {
-            "serviceName": service_name,
-            "healthyOnly": healthy_only
-        }
+        params = {"serviceName": service_name, "healthyOnly": healthy_only}
 
         if clusters is not None:
             params["clusters"] = clusters
@@ -679,10 +879,19 @@ class NacosClient:
             params["namespaceId"] = self.namespace
 
         try:
-            resp = self._do_sync_req("/nacos/v1/ns/instance/list", None, params, None, self.default_timeout, "GET")
+            resp = self._do_sync_req(
+                "/nacos/v1/ns/instance/list",
+                None,
+                params,
+                None,
+                self.default_timeout,
+                "GET",
+            )
             c = resp.read()
-            logger.info("[list-naming-instance] service_name:%s, namespace:%s, server response:%s" %
-                        (service_name, self.namespace, c))
+            logger.info(
+                "[list-naming-instance] service_name:%s, namespace:%s, server response:%s"
+                % (service_name, self.namespace, c)
+            )
             return json.loads(c.decode("UTF-8"))
         except HTTPError as e:
             if e.code == HTTPStatus.FORBIDDEN:
@@ -694,8 +903,10 @@ class NacosClient:
             raise
 
     def get_naming_instance(self, service_name, ip, port, cluster_name=None):
-        logger.info("[get-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s" % (ip, port, service_name,
-                                                                                             self.namespace))
+        logger.info(
+            "[get-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s"
+            % (ip, port, service_name, self.namespace)
+        )
 
         params = {
             "serviceName": service_name,
@@ -710,10 +921,14 @@ class NacosClient:
             params["namespaceId"] = self.namespace
 
         try:
-            resp = self._do_sync_req("/nacos/v1/ns/instance", None, params, None, self.default_timeout, "GET")
+            resp = self._do_sync_req(
+                "/nacos/v1/ns/instance", None, params, None, self.default_timeout, "GET"
+            )
             c = resp.read()
-            logger.info("[get-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s, server response:%s" %
-                        (ip, port, service_name, self.namespace, c))
+            logger.info(
+                "[get-naming-instance] ip:%s, port:%s, service_name:%s, namespace:%s, server response:%s"
+                % (ip, port, service_name, self.namespace, c)
+            )
             return json.loads(c.decode("UTF-8"))
         except HTTPError as e:
             if e.code == HTTPStatus.FORBIDDEN:
@@ -724,14 +939,18 @@ class NacosClient:
             logger.exception("[get-naming-instance] exception %s occur" % str(e))
             raise
 
-    def send_heartbeat(self, service_name, ip, port, cluster_name=None, weight=1.0, metadata=None):
-        logger.info("[send-heartbeat] ip:%s, port:%s, service_name:%s, namespace:%s" % (ip, port, service_name,
-                                                                                        self.namespace))
+    def send_heartbeat(
+        self, service_name, ip, port, cluster_name=None, weight=1.0, metadata=None
+    ):
+        logger.info(
+            "[send-heartbeat] ip:%s, port:%s, service_name:%s, namespace:%s"
+            % (ip, port, service_name, self.namespace)
+        )
         beat_data = {
             "serviceName": service_name,
             "ip": ip,
             "port": port,
-            "weight": weight
+            "weight": weight,
         }
 
         if cluster_name is not None:
@@ -749,10 +968,19 @@ class NacosClient:
             params["namespaceId"] = self.namespace
 
         try:
-            resp = self._do_sync_req("/nacos/v1/ns/instance/beat", None, params, None, self.default_timeout, "PUT")
+            resp = self._do_sync_req(
+                "/nacos/v1/ns/instance/beat",
+                None,
+                params,
+                None,
+                self.default_timeout,
+                "PUT",
+            )
             c = resp.read()
-            logger.info("[send-heartbeat] ip:%s, port:%s, service_name:%s, namespace:%s, server response:%s" %
-                        (ip, port, service_name, self.namespace, c))
+            logger.info(
+                "[send-heartbeat] ip:%s, port:%s, service_name:%s, namespace:%s, server response:%s"
+                % (ip, port, service_name, self.namespace, c)
+            )
             return json.loads(c.decode("UTF-8"))
         except HTTPError as e:
             if e.code == HTTPStatus.FORBIDDEN:
